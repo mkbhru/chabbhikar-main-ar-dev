@@ -1,0 +1,30 @@
+{
+  "name": "chabbhikar-main",
+  "private": true,
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5",
+    "turbo": "^2.2.3",
+    "typescript": "5.5.4"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "yarn@4.5.3",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "dependencies": {
+    "@types/three": "^0.173.0",
+    "aframe": "^1.6.0",
+    "ar.js": "^2.2.2",
+    "three": "^0.173.0",
+    "zustand": "^5.0.3"
+  }
+}
