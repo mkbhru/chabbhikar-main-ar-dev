@@ -1,103 +1,144 @@
 "use client";
-
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { Box, Button } from "@chakra-ui/react";
 
 const ARCanvas = () => {
-  const [isVideoActive, setIsVideoActive] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const cameraRef = useRef<THREE.Camera | null>(null);
-  const artworkRef = useRef<THREE.Mesh | null>(null);
+  const [isARSupported, setIsARSupported] = useState(false);
+  const [isARToggled, setIsARToggled] = useState(false);
+  const scene = useRef<THREE.Scene | null>(null);
+  const renderer = useRef<THREE.WebGLRenderer | null>(null);
+  const camera = useRef<THREE.PerspectiveCamera | null>(null);
+  const hitTestSource = useRef<XRHitTestSource | null>(null);
+  const xrSession = useRef<XRSession | null>(null);
+  const reticle = useRef<THREE.Mesh | null>(null);
+  const artwork = useRef<THREE.Mesh | null>(null);
+  const xrReferenceSpace = useRef<XRReferenceSpace | null>(null);
 
   useEffect(() => {
-    // Start video stream from the back camera
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
-        });
+    // Check WebXR support
+    if (navigator.xr) {
+      navigator.xr.isSessionSupported("immersive-ar").then(setIsARSupported);
+    }
+  }, []);
 
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (error) {
-        console.error("Error accessing camera:", error);
+  const startAR = async () => {
+    if (!navigator.xr) return;
+
+    try {
+      // Request an AR session
+      const session = await navigator.xr.requestSession("immersive-ar", {
+        requiredFeatures: ["hit-test"],
+      });
+
+      xrSession.current = session;
+
+      // Create Three.js scene
+      scene.current = new THREE.Scene();
+      camera.current = new THREE.PerspectiveCamera(
+        70,
+        window.innerWidth / window.innerHeight,
+        0.01,
+        20
+      );
+
+      renderer.current = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true,
+      });
+
+      renderer.current.xr.enabled = true;
+      document.body.appendChild(renderer.current.domElement);
+
+      const gl = renderer.current.getContext() as WebGLRenderingContext;
+      const xrRefSpace = await session.requestReferenceSpace("local-floor");
+      xrReferenceSpace.current = xrRefSpace;
+
+      // Request hit test source
+      const viewerSpace = await session.requestReferenceSpace("viewer");
+      const hitTestSourceInit = await session.requestHitTestSource?.({
+        space: viewerSpace,
+      });
+
+      if (!hitTestSourceInit) {
+        console.error("Hit test source could not be created.");
+        return;
+      }
+
+      hitTestSource.current = hitTestSourceInit;
+
+      // Create reticle (indicator for placing artwork)
+      const geometry = new THREE.RingGeometry(0.15, 0.2, 32);
+      const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      reticle.current = new THREE.Mesh(geometry, material);
+      reticle.current.rotation.x = -Math.PI / 2;
+      reticle.current.visible = false;
+      scene.current.add(reticle.current);
+
+      // Render loop
+  const onXRFrame = (time: DOMHighResTimeStamp, frame: XRFrame | null) => {
+    if (!frame || !scene.current || !renderer.current || !camera.current)
+      return;
+
+    const session = frame.session;
+    const pose = frame.getViewerPose(xrReferenceSpace.current!);
+    if (!pose) return;
+
+    const hitTestResults = frame.getHitTestResults(hitTestSource.current!);
+
+    // Ensure hitTestResults contains at least one valid entry
+    if (hitTestResults.length > 0) {
+      const hit = hitTestResults[0];
+
+      // Ensure hit.getPose() does not return null
+      const hitPose = hit?.getPose(xrReferenceSpace.current!);
+      if (hitPose) {
+        const matrix = new THREE.Matrix4().fromArray(hitPose.transform.matrix);
+        reticle.current!.position.setFromMatrixPosition(matrix);
+        reticle.current!.visible = true;
+      }
+    } else {
+      // If no hit test results, hide reticle
+      if (reticle.current) {
+        reticle.current.visible = false;
       }
     }
 
-    startCamera();
-  }, []);
+    renderer.current!.render(scene.current!, camera.current!);
+    session.requestAnimationFrame(onXRFrame);
+  };
+      session.requestAnimationFrame(onXRFrame);
 
-  const startAR = () => {
-    if (!canvasRef.current || !videoRef.current) return;
+      // Handle placement of artwork on user tap
+      session.addEventListener("select", () => {
+        if (!scene.current || !reticle.current) return;
 
-    setIsVideoActive(true);
+        // Load artwork texture
+        const texture = new THREE.TextureLoader().load("/art.png");
 
-    // Initialize Three.js scene
-    sceneRef.current = new THREE.Scene();
-    cameraRef.current = new THREE.PerspectiveCamera(
-      70,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      1000
-    );
-    rendererRef.current = new THREE.WebGLRenderer({
-      canvas: canvasRef.current,
-      alpha: true,
-    });
-    rendererRef.current.setSize(window.innerWidth, window.innerHeight);
+        // Create 3D plane for artwork
+        const artworkGeometry = new THREE.PlaneGeometry(1, 1.5);
+        const artworkMaterial = new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+        });
+        artwork.current = new THREE.Mesh(artworkGeometry, artworkMaterial);
 
-    // Create artwork texture
-    const texture = new THREE.TextureLoader().load("/art.png");
-    const artworkGeometry = new THREE.PlaneGeometry(1, 1.5);
-    const artworkMaterial = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-    });
+        // Position artwork at the reticle location
+        artwork.current.position.copy(reticle.current.position);
+        artwork.current.lookAt(camera.current!.position);
+        scene.current.add(artwork.current);
+      });
 
-    artworkRef.current = new THREE.Mesh(artworkGeometry, artworkMaterial);
-    artworkRef.current.position.set(0, 0, -2); // Set artwork at a fixed distance
-    sceneRef.current.add(artworkRef.current);
-
-    // Render loop
-    const animate = () => {
-      requestAnimationFrame(animate);
-
-      if (artworkRef.current) {
-        artworkRef.current.lookAt(cameraRef.current!.position);
-      }
-
-      rendererRef.current!.render(sceneRef.current!, cameraRef.current!);
-    };
-
-    animate();
+      setIsARToggled(true);
+    } catch (error) {
+      console.error("Error starting AR session:", error);
+    }
   };
 
   return (
     <Box width="100vw" height="100vh" bg="black" position="relative">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-        }}
-      />
-      <canvas
-        ref={canvasRef}
-        style={{ position: "absolute", top: 0, left: 0 }}
-      />
-      {!isVideoActive && (
+      {isARSupported ? (
         <Button
           position="absolute"
           bottom="20px"
@@ -108,6 +149,10 @@ const ARCanvas = () => {
         >
           Start AR
         </Button>
+      ) : (
+        <p style={{ color: "white", textAlign: "center" }}>
+          AR not supported on this device
+        </p>
       )}
     </Box>
   );
